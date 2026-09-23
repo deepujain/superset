@@ -1,0 +1,14 @@
+[
+  {
+    "name": "60_Crashed",
+    "color": "#8b0000"
+  },
+  {
+    "name": "50_Error",
+    "color": "#ff0000"
+  },
+  {
+    "name": "20_Passed",
+    "color": "#008000"
+  }
+]
