@@ -1641,6 +1641,116 @@ async def test_saved_get_data_normalizes_nested_warehouse_cells(
     assert data["data"] == [{"value": None}, {"value": expected}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["saved", "edited", "unsaved", "restricted"])
+async def test_get_chart_data_rendering_metadata(
+    mcp_server: Any, mock_auth: Any, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """A downstream renderer can distinguish stacked series without raw form data."""
+    module = importlib.import_module("superset.mcp_service.chart.tool.get_chart_data")
+    form_data = {
+        "datasource": "7__table",
+        "viz_type": "echarts_timeseries_bar",
+        "stack": "Stack",
+        "color_scheme": "supersetColors",
+        "x_axis": "month",
+        "x_axis_title": "Month",
+        "x_axis_sort": "Profit",
+        "x_axis_number_format": ".1%",
+        "y_axis_format": ",.2f",
+        "groupby": ["region"],
+        "metrics": [{"label": "Sales", "sqlExpression": "SUM(private_column)"}],
+    }
+    command = MagicMock()
+    primary = chart_data_command_result(
+        [{"month": 0.25, "region": "East", "Sales": 10, "Profit": 4}]
+    )
+    secondary = chart_data_command_result(
+        [{"region": "East", "country": "US", "Volume": 2}]
+    )
+    command.return_value.run.return_value = {
+        "queries": primary["queries"] + secondary["queries"]
+    }
+    _patch_unsaved_get_data(monkeypatch, command, form_data)
+    saved_form = {**form_data, "stack": False, "metrics": ["stale"]}
+    queries = [
+        SimpleNamespace(
+            columns=["month", "region"],
+            series_columns=["region"],
+            metrics=[*form_data["metrics"], "Profit"],
+        ),
+        SimpleNamespace(
+            columns=["region", "country"],
+            series_columns=["region", "country"],
+            metrics=["Volume"],
+        ),
+    ]
+    chart = SimpleNamespace(
+        id=9,
+        slice_name="Sales by region",
+        viz_type=form_data["viz_type"],
+        datasource_id=7,
+        datasource_type="table",
+        params=json.dumps(saved_form),
+        query_context=json.dumps(
+            {"datasource": {"id": 7, "type": "table"}, "queries": []}
+        ),
+    )
+    monkeypatch.setattr(
+        module, "find_chart_by_identifier", lambda *args, **kwargs: chart
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chart_dataset",
+        lambda *args, **kwargs: SimpleNamespace(is_valid=True, warnings=[], error=None),
+    )
+    monkeypatch.setattr(
+        "superset.charts.schemas.ChartDataQueryContextSchema.load",
+        lambda *args, **kwargs: SimpleNamespace(queries=queries, form_data={}),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_query_context_from_form_data",
+        lambda *args, **kwargs: SimpleNamespace(queries=queries, form_data={}),
+    )
+    monkeypatch.setattr(
+        "superset.mcp_service.privacy.user_can_view_data_model_metadata",
+        lambda: source != "restricted",
+    )
+    request: dict[str, Any] = {}
+    if source != "unsaved":
+        request["identifier"] = 9
+    if source in {"edited", "unsaved"}:
+        request["form_data_key"] = "edited-chart"
+    async with Client(mcp_server) as client:
+        original = await client.call_tool("get_chart_data", {"request": request})
+        response = await client.call_tool(
+            "get_chart_data",
+            {"request": {**request, "include_rendering_metadata": True}},
+        )
+    original_data = json.loads(original.content[0].text)
+    data = json.loads(response.content[0].text)
+    assert "rendering_metadata" not in original_data
+    assert data["data"] == original_data["data"]
+    if source == "restricted":
+        assert "rendering_metadata" not in data
+        return
+    metadata = data["rendering_metadata"]
+    assert metadata["viz_type"] == "echarts_timeseries_bar"
+    assert metadata["stack"] == (False if source == "saved" else "Stack")
+    assert metadata["metrics"] == ["Sales", "Profit", "Volume"]
+    assert metadata["value_metrics"] == (None if source == "saved" else ["Sales"])
+    assert metadata["dimensions"] == ["month", "region", "country"]
+    assert metadata["series_dimensions"] == ["region", "country"]
+    assert metadata["x_axis"] == "month"
+    assert metadata["x_axis_title"] == "Month"
+    assert metadata["x_axis_sort"] == "Profit"
+    assert metadata["x_axis_number_format"] == ".1%"
+    assert metadata["y_axis_format"] == ",.2f"
+    assert metadata["color_scheme"] == "supersetColors"
+    assert "private_column" not in json.dumps(metadata)
+
+
 class TestUnsavedChartDataQueryConstruction:
     @pytest.mark.asyncio
     async def test_form_data_key_adhoc_filters_become_query_filters(

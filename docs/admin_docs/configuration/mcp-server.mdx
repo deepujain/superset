@@ -2041,6 +2041,29 @@ the saved `chart.id`, with a warning and optional content omitted. Retrieve the
 chart by that ID instead of retrying the write. Unsaved responses that exceed
 these limits still return a structured failure.
 
+## Rendering chart data in a client
+
+To render a chart from its rows, call `get_chart_data` with
+`{"identifier": 42, "include_rendering_metadata": true}`. The JSON result includes
+`rendering_metadata` alongside the data. For example, a bar chart grouped by
+region can return `dimensions: ["region"]`, `metrics: ["Sales"]` and
+`stack: "Stack"`, so the client knows to stack the regional series rather than
+draw them side by side. Color scheme, orientation, axis titles and format strings
+are included when configured. A missing setting is `null`, not an inferred
+plugin default. Metrics and dimensions list the labels from the executed queries,
+including secondary queries; a label may itself be a SQL expression. On a bar
+chart sorted by a non-plotted metric, `metrics` includes the sort metric but
+`value_metrics` lists only the executed metrics selected as values. Use
+`series_dimensions` for the series grouping rather than treating every column
+as a series. `x_axis_sort` and `x_axis_number_format` carry the configured sort
+and numeric display format. Passing
+`form_data_key` uses the same Explore edits as the data. The server omits these
+hints for callers without data-model metadata access, including embedded guests.
+
+The default response and CSV and Excel exports do not include these hints. For
+an image that matches Superset's renderer, use `get_chart_preview` with
+`format: "png"` instead.
+
 ## Chart data column counts
 
 For saved and unsaved charts, `get_chart_data` column metadata excludes missing

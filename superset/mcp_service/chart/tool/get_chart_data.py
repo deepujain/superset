@@ -23,7 +23,7 @@ import datetime as dt
 import logging
 import math
 import time
-from typing import Any, Dict, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple, TYPE_CHECKING
 from uuid import UUID
 
 import pandas as pd
@@ -47,7 +47,7 @@ from superset.exceptions import (
     SupersetSecurityException,
 )
 from superset.extensions import event_logger
-from superset.mcp_service import guest_scope
+from superset.mcp_service import guest_scope, privacy
 from superset.mcp_service.chart.big_number_headline import (
     compute_big_number_headline,
     executed_query_facts,
@@ -68,6 +68,8 @@ from superset.mcp_service.chart.chart_utils import (
     validate_chart_semantic_view,
 )
 from superset.mcp_service.chart.query_result import (
+    column_result_label,
+    metric_result_label,
     normalize_chart_query_result,
     null_data_is_empty,
     query_result_failure,
@@ -83,6 +85,7 @@ from superset.mcp_service.chart.schemas import (
     ChartData,
     ChartError,
     ChartQueryResult,
+    ChartRenderingMetadata,
     DataColumn,
     GetChartDataRequest,
     PerformanceMetadata,
@@ -106,6 +109,9 @@ from superset.utils.json import JSONDecodeError
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from superset.common.query_context import QueryContext
+
 
 class _ChartFacts(NamedTuple):
     """Chart values copied off the Slice while it is still session-attached.
@@ -128,6 +134,71 @@ class _ChartFacts(NamedTuple):
 def _is_expected_json_load_error(exc: Exception) -> bool:
     """Recognize only the exact exceptions emitted for ordinary JSON failures."""
     return type(exc) in {TypeError, ValueError, JSONDecodeError}
+
+
+def _rendering_metadata(
+    request: GetChartDataRequest,
+    form_data: dict[str, Any],
+    query_context: "QueryContext",
+) -> ChartRenderingMetadata | None:
+    """Combine presentation controls with labels from every executed query."""
+    if (
+        not request.include_rendering_metadata
+        or not privacy.user_can_view_data_model_metadata()
+    ):
+        return None
+
+    def text(value: Any) -> str | None:
+        return value if isinstance(value, str) else None
+
+    stack = form_data.get("stack", form_data.get("stacked"))
+    metrics = list(
+        dict.fromkeys(
+            label
+            for query in query_context.queries
+            for item in query.metrics or []
+            if (label := metric_result_label(item))
+        )
+    )
+    selected_metrics: set[str | None] = set()
+    for key in ("metrics", "metrics_b", "metric", "secondary_metric"):
+        selection = form_data.get(key)
+        items = selection if isinstance(selection, list) else [selection]
+        selected_metrics.update(metric_result_label(item) for item in items)
+    return ChartRenderingMetadata(
+        viz_type=text(form_data.get("viz_type")),
+        stack=stack if isinstance(stack, (str, bool)) else None,
+        stack_dimension=text(form_data.get("stackDimension")),
+        contribution_mode=text(form_data.get("contributionMode")),
+        color_scheme=text(form_data.get("color_scheme")),
+        orientation=text(form_data.get("orientation")),
+        x_axis=column_result_label(form_data.get("x_axis")),
+        x_axis_title=text(form_data.get("x_axis_title")),
+        y_axis_title=text(form_data.get("y_axis_title")),
+        x_axis_time_format=text(form_data.get("x_axis_time_format")),
+        x_axis_number_format=text(form_data.get("x_axis_number_format")),
+        x_axis_sort=text(form_data.get("x_axis_sort")),
+        y_axis_format=text(form_data.get("y_axis_format")),
+        number_format=text(form_data.get("number_format")),
+        metrics=metrics,
+        value_metrics=[label for label in metrics if label in selected_metrics] or None,
+        series_dimensions=list(
+            dict.fromkeys(
+                label
+                for query in query_context.queries
+                for item in query.series_columns
+                if (label := column_result_label(item))
+            )
+        ),
+        dimensions=list(
+            dict.fromkeys(
+                label
+                for query in query_context.queries
+                for item in query.columns
+                if (label := column_result_label(item))
+            )
+        ),
+    )
 
 
 def _access_denied_error(exc: SupersetSecurityException) -> ChartError:
@@ -1267,6 +1338,9 @@ async def _get_chart_data(  # noqa: C901
                 chart_id=chart_id,
                 chart_name=chart_name or f"Chart {chart_id}",
                 chart_type=chart_viz_type or "unknown",
+                rendering_metadata=_rendering_metadata(
+                    request, effective_form_data, query_context
+                ),
                 columns=columns,
                 data=data[: request.limit] if request.limit else data,
                 query_results=_build_query_results(result["queries"], request.limit),
@@ -1540,6 +1614,7 @@ async def _query_from_form_data(  # noqa: C901
             chart_id=0,
             chart_name=chart_name,
             chart_type=viz_type,
+            rendering_metadata=_rendering_metadata(request, form_data, query_context),
             columns=columns,
             data=limited_data,
             query_results=_build_query_results(result["queries"], request.limit),

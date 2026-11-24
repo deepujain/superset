@@ -6793,6 +6793,10 @@ class GetChartDataRequest(QueryCacheControl):
     format: Literal["json", "csv", "excel"] = Field(
         default="json", description="Data export format"
     )
+    include_rendering_metadata: bool = Field(
+        default=False,
+        description="Include presentation settings and series labels in JSON results.",
+    )
 
 
 class DataColumn(BaseModel):
@@ -6867,6 +6871,36 @@ class BigNumberHeadline(BaseModel):
     )
 
 
+class ChartRenderingMetadata(BaseModel):
+    """Presentation hints for clients rendering the chart's data themselves."""
+
+    viz_type: str | None
+    stack: str | bool | None
+    stack_dimension: str | None
+    contribution_mode: str | None
+    color_scheme: str | None
+    orientation: str | None
+    x_axis: str | None
+    x_axis_title: str | None
+    y_axis_title: str | None
+    x_axis_time_format: str | None
+    x_axis_number_format: str | None
+    x_axis_sort: str | None
+    y_axis_format: str | None
+    number_format: str | None
+    metrics: list[str]
+    dimensions: list[str]
+    value_metrics: list[str] | None = Field(
+        description=(
+            "Executed metrics selected as values, excluding sort-only metrics. "
+            "Null when no matching selection is available."
+        )
+    )
+    series_dimensions: list[str] = Field(
+        description="Executed series grouping columns, distinct from the x-axis column."
+    )
+
+
 class ChartData(BaseModel):
     """Rich chart data response with statistical insights."""
 
@@ -6874,6 +6908,12 @@ class ChartData(BaseModel):
     chart_id: int
     chart_name: str
     chart_type: str
+
+    rendering_metadata: ChartRenderingMetadata | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Presentation hints when requested for a JSON result.",
+    )
 
     # Internal handoff to the dashboard tool; not part of the public chart payload.
     _query_row_limits: list[int | None] = PrivateAttr(default_factory=list)
