@@ -188,6 +188,43 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
+function setupWithDescription(description: string | null) {
+  return setup(
+    {},
+    {
+      sliceEntities: {
+        ...defaultState.sliceEntities,
+        slices: {
+          [queryId]: {
+            ...defaultState.sliceEntities.slices[queryId],
+            description,
+          },
+        },
+      },
+    },
+  );
+}
+
+test('exposes a dashboard chart description as the name of a group', () => {
+  const description = 'Sales by region';
+  const { getByRole } = setupWithDescription(description);
+  expect(getByRole('group', { name: description })).toHaveClass(
+    'dashboard-chart',
+  );
+});
+
+test.each([null, '', '   '])(
+  'leaves the dashboard chart wrapper unnamed for %p',
+  description => {
+    const { container } = setupWithDescription(description);
+    const wrapper = container.querySelector('.dashboard-chart');
+
+    expect(wrapper).toBeInTheDocument();
+    expect(wrapper).not.toHaveAttribute('role');
+    expect(wrapper).not.toHaveAttribute('aria-label');
+  },
+);
+
 test('shows the loading spinner for a chart that starts loading outside the in-flight auto-refresh batch', () => {
   setupDuringUnrelatedAutoRefresh([queryId + 1], undefined, {
     charts: {

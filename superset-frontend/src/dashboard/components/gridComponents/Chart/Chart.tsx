@@ -799,6 +799,7 @@ const Chart = (props: ChartProps) => {
       ? (slice.localized_name ?? slice.slice_name)
       : props.sliceName;
 
+  const chartDescription = slice.description?.trim() || undefined;
   const sliceForHeader = {
     description: slice.description || '',
     viz_type: slice.viz_type,
@@ -895,7 +896,8 @@ const Chart = (props: ChartProps) => {
 
       <ChartWrapper
         className={cx('dashboard-chart')}
-        aria-label={slice.description}
+        role={chartDescription ? 'group' : undefined}
+        aria-label={chartDescription}
       >
         {isLoading && !suppressLoadingSpinner && (
           <ChartOverlay
